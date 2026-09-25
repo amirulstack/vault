@@ -1,0 +1,2036 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Vault — Distributed Object Storage</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:#05070b;
+  color:#e5e7eb;
+  font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+}
+.mono{font-family:"SFMono-Regular",Consolas,monospace}
+.glass{
+  background:rgba(15,23,42,.72);
+  border:1px solid rgba(148,163,184,.12);
+  backdrop-filter:blur(16px);
+}
+.card{
+  background:linear-gradient(145deg,rgba(15,23,42,.95),rgba(8,13,24,.95));
+  border:1px solid #1e293b;
+  border-radius:16px;
+}
+.status{
+  padding:4px 9px;
+  border-radius:999px;
+  font-size:11px;
+  font-weight:700;
+}
+.healthy{color:#34d399;background:#052e24}
+.failed{color:#fb7185;background:#3b0b16}
+.degraded{color:#fbbf24;background:#3b2805}
+.recovering{color:#38bdf8;background:#062d42}
+.corrupted{color:#fb7185;background:#3b0b16}
+.progress{
+  height:7px;
+  background:#0f172a;
+  border-radius:20px;
+  overflow:hidden;
+}
+.progress>div{
+  height:100%;
+  border-radius:20px;
+  transition:width .4s;
+}
+button{
+  transition:.18s;
+}
+button:hover{transform:translateY(-1px)}
+.node-dot{
+  width:11px;height:11px;border-radius:50%;
+  box-shadow:0 0 12px currentColor;
+}
+.pulse{
+  animation:pulse 1.3s infinite;
+}
+@keyframes pulse{
+  0%,100%{opacity:1}
+  50%{opacity:.35}
+}
+.modal{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.7);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  z-index:100;
+}
+.hidden{display:none!important}
+.log-line{
+  border-bottom:1px solid rgba(148,163,184,.06);
+  padding:7px 0;
+}
+.topology-line{
+  height:2px;
+  background:linear-gradient(90deg,#38bdf8,#34d399);
+  flex:1;
+  animation:flow 1.2s linear infinite;
+}
+@keyframes flow{
+  from{background-position:0}
+  to{background-position:100px}
+}
+</style>
+</head>
+
+<body>
+
+<div class="min-h-screen flex">
+
+<!-- SIDEBAR -->
+<aside class="w-64 hidden lg:flex flex-col border-r border-slate-800 bg-slate-950/80 p-5">
+
+  <div class="flex items-center gap-3 mb-10">
+    <div class="w-10 h-10 rounded-xl bg-cyan-400/10 border border-cyan-400/30 flex items-center justify-center">
+      <i data-lucide="database" class="text-cyan-400"></i>
+    </div>
+    <div>
+      <div class="font-bold text-lg">VAULT</div>
+      <div class="text-[10px] text-slate-500 mono">DISTRIBUTED STORAGE</div>
+    </div>
+  </div>
+
+  <nav class="space-y-2">
+    <button onclick="showPage('dashboard')" class="nav w-full text-left px-3 py-2.5 rounded-lg bg-slate-800">
+      ◈ Dashboard
+    </button>
+    <button onclick="showPage('nodes')" class="nav w-full text-left px-3 py-2.5 rounded-lg hover:bg-slate-800">
+      ◉ Node Fleet
+    </button>
+    <button onclick="showPage('objects')" class="nav w-full text-left px-3 py-2.5 rounded-lg hover:bg-slate-800">
+      ▣ Objects
+    </button>
+    <button onclick="showPage('logs')" class="nav w-full text-left px-3 py-2.5 rounded-lg hover:bg-slate-800">
+      ≡ System Logs
+    </button>
+  </nav>
+
+  <div class="mt-auto card p-4">
+    <div class="text-xs text-slate-500 mb-2">CLUSTER STATUS</div>
+    <div class="flex items-center gap-2">
+      <div id="clusterDot" class="node-dot text-emerald-400 bg-emerald-400"></div>
+      <span id="clusterStatus">OPERATIONAL</span>
+    </div>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<main class="flex-1 min-w-0">
+
+<header class="h-16 border-b border-slate-800 flex items-center justify-between px-5 lg:px-8">
+  <div>
+    <h1 id="pageTitle" class="font-semibold">Cluster Overview</h1>
+    <div class="text-xs text-slate-500 mono">VAULT / LOCAL SIMULATION</div>
+  </div>
+
+  <div class="flex items-center gap-3">
+    <button onclick="runDemo()"
+      class="bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2 rounded-lg text-sm">
+      ▶ Run Demo
+    </button>
+
+    <label class="cursor-pointer bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-sm">
+      Upload Object
+      <input type="file" id="fileInput" class="hidden" onchange="uploadFile(event)">
+    </label>
+  </div>
+</header>
+
+<div class="p-5 lg:p-8">
+
+<!-- DASHBOARD -->
+<section id="dashboard" class="page">
+
+  <div class="grid grid-cols-2 xl:grid-cols-4 gap-4 mb-5">
+
+    <div class="card p-5">
+      <div class="text-xs text-slate-500">TOTAL CAPACITY</div>
+      <div id="totalCapacity" class="text-2xl font-bold mt-2">500 GB</div>
+      <div class="text-xs text-slate-500 mt-1">5 × 100 GB</div>
+    </div>
+
+    <div class="card p-5">
+      <div class="text-xs text-slate-500">USED SPACE</div>
+      <div id="usedSpace" class="text-2xl font-bold mt-2">0 MB</div>
+      <div id="usedPercent" class="text-xs text-cyan-400 mt-1">0%</div>
+    </div>
+
+    <div class="card p-5">
+      <div class="text-xs text-slate-500">HEALTHY NODES</div>
+      <div id="healthyNodes" class="text-2xl font-bold mt-2">5 / 5</div>
+      <div class="text-xs text-emerald-400 mt-1">Cluster availability</div>
+    </div>
+
+    <div class="card p-5">
+      <div class="text-xs text-slate-500">OBJECTS</div>
+      <div id="objectCount" class="text-2xl font-bold mt-2">0</div>
+      <div class="text-xs text-slate-500 mt-1">Distributed objects</div>
+    </div>
+
+  </div>
+
+  <!-- SIMULATION BAR -->
+  <div class="card p-4 mb-5">
+    <div class="flex flex-wrap gap-2 items-center">
+      <span class="text-xs text-slate-500 mr-2">CONTROL CENTER</span>
+
+      <button onclick="failNode('node-02')"
+        class="bg-rose-500/10 border border-rose-500/30 text-rose-300 px-3 py-2 rounded-lg text-xs">
+        🚨 Fail Node-02
+      </button>
+
+      <button onclick="repairAll()"
+        class="bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 px-3 py-2 rounded-lg text-xs">
+        🩹 Auto Repair
+      </button>
+
+      <button onclick="corruptReplica()"
+        class="bg-amber-500/10 border border-amber-500/30 text-amber-300 px-3 py-2 rounded-lg text-xs">
+        🧪 Corrupt Replica
+      </button>
+
+      <button onclick="partitionNode()"
+        class="bg-sky-500/10 border border-sky-500/30 text-sky-300 px-3 py-2 rounded-lg text-xs">
+        🌐 Network Partition
+      </button>
+
+      <button onclick="rebalance()"
+        class="bg-purple-500/10 border border-purple-500/30 text-purple-300 px-3 py-2 rounded-lg text-xs">
+        ⚖ Rebalance
+      </button>
+    </div>
+  </div>
+
+  <div class="grid xl:grid-cols-3 gap-5">
+
+    <!-- ARCHITECTURE -->
+    <div class="card p-5 xl:col-span-2">
+      <div class="flex justify-between mb-5">
+        <div>
+          <h2 class="font-semibold">Cluster Architecture</h2>
+          <p class="text-xs text-slate-500 mt-1">
+            Real-time simulated data path
+          </p>
+        </div>
+        <span class="status healthy">LIVE</span>
+      </div>
+
+      <div class="flex items-center gap-3 mb-8">
+        <div class="px-4 py-3 rounded-xl bg-slate-900 border border-slate-700 text-xs">
+          CLIENT
+        </div>
+
+        <div class="topology-line"></div>
+
+        <div class="px-4 py-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs">
+          GATEWAY
+        </div>
+
+        <div class="topology-line"></div>
+
+        <div class="px-4 py-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-300 text-xs">
+          COORDINATOR
+        </div>
+      </div>
+
+      <div id="architectureNodes" class="grid grid-cols-2 md:grid-cols-5 gap-3"></div>
+    </div>
+
+    <!-- HEALTH -->
+    <div class="card p-5">
+      <h2 class="font-semibold">Durability</h2>
+
+      <div class="mt-6 text-center">
+        <div id="durabilityScore" class="text-5xl font-bold text-emerald-400">
+          100%
+        </div>
+        <div class="text-xs text-slate-500 mt-2">
+          Healthy replica ratio
+        </div>
+      </div>
+
+      <div class="mt-8 space-y-4">
+        <div class="flex justify-between text-sm">
+          <span>Replication Factor</span>
+          <span class="mono text-cyan-400">3</span>
+        </div>
+
+        <div class="flex justify-between text-sm">
+          <span>Integrity</span>
+          <span id="integrityStatus" class="text-emerald-400">PASS</span>
+        </div>
+
+        <div class="flex justify-between text-sm">
+          <span>Active Repairs</span>
+          <span id="repairCount">0</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- NODE STORAGE -->
+  <div class="card p-5 mt-5">
+    <div class="flex justify-between mb-5">
+      <h2 class="font-semibold">Storage Distribution</h2>
+      <span class="text-xs text-slate-500 mono">LIVE FS MODEL</span>
+    </div>
+
+    <div id="storageDistribution" class="space-y-4"></div>
+  </div>
+
+  <!-- TERMINAL -->
+  <div class="card p-5 mt-5">
+    <div class="flex justify-between mb-4">
+      <h2 class="font-semibold">Live Event Terminal</h2>
+      <span class="status healthy pulse">STREAMING</span>
+    </div>
+
+    <div id="terminal"
+      class="bg-black rounded-xl p-4 h-72 overflow-y-auto mono text-xs text-slate-400">
+    </div>
+  </div>
+
+</section>
+
+
+<!-- NODES -->
+<section id="nodes" class="page hidden">
+
+  <div class="mb-5">
+    <h2 class="text-xl font-bold">Node Fleet</h2>
+    <p class="text-sm text-slate-500">Five independently simulated storage nodes</p>
+  </div>
+
+  <div id="nodeGrid" class="grid md:grid-cols-2 xl:grid-cols-3 gap-5"></div>
+
+</section>
+
+
+<!-- OBJECTS -->
+<section id="objects" class="page hidden">
+
+  <div class="flex justify-between items-center mb-5">
+    <div>
+      <h2 class="text-xl font-bold">Object Browser</h2>
+      <p class="text-sm text-slate-500">
+        Distributed object metadata and replicas
+      </p>
+    </div>
+
+    <label class="cursor-pointer bg-cyan-500 text-slate-950 font-bold px-4 py-2 rounded-lg text-sm">
+      + Upload
+      <input type="file" class="hidden" onchange="uploadFile(event)">
+    </label>
+  </div>
+
+  <div class="card overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-900 text-slate-500 text-xs">
+          <tr>
+            <th class="text-left p-4">OBJECT</th>
+            <th class="text-left p-4">SIZE</th>
+            <th class="text-left p-4">SHA-256</th>
+            <th class="text-left p-4">REPLICAS</th>
+            <th class="text-left p-4">STATUS</th>
+          </tr>
+        </thead>
+        <tbody id="objectTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+</section>
+
+
+<!-- LOGS -->
+<section id="logs" class="page hidden">
+
+  <div class="mb-5">
+    <h2 class="text-xl font-bold">System Logs</h2>
+    <p class="text-sm text-slate-500">Cluster events and repair activity</p>
+  </div>
+
+  <div class="card p-5">
+    <div id="fullLogs" class="mono text-xs"></div>
+  </div>
+
+</section>
+
+</div>
+</main>
+</div>
+
+
+<!-- OBJECT MODAL -->
+<div id="objectModal" class="modal hidden">
+  <div class="card w-[95%] max-w-3xl p-6 max-h-[90vh] overflow-auto">
+
+    <div class="flex justify-between">
+      <h2 id="modalTitle" class="text-xl font-bold"></h2>
+      <button onclick="closeModal()" class="text-slate-500 hover:text-white">
+        ✕
+      </button>
+    </div>
+
+    <div id="modalContent" class="mt-6"></div>
+
+  </div>
+</div>
+
+
+<script>
+
+lucide.createIcons();
+
+/* =========================================================
+   VAULT STATE
+========================================================= */
+
+const REPLICATION_FACTOR = 3;
+const CAPACITY = 100 * 1024 * 1024 * 1024;
+
+let nodes = [
+  createNode("node-01"),
+  createNode("node-02"),
+  createNode("node-03"),
+  createNode("node-04"),
+  createNode("node-05")
+];
+
+let objects = [];
+let logs = [];
+let activeRepairs = 0;
+let demoRunning = false;
+
+function createNode(id){
+  return {
+    id,
+    hostname:id.toUpperCase(),
+    status:"HEALTHY",
+    used:0,
+    capacity:CAPACITY,
+    latencyMs:Math.floor(Math.random()*20)+5,
+    packetLossRate:0,
+    isPartitioned:false,
+    lastHeartbeat:Date.now(),
+    replicas:[]
+  };
+}
+
+
+/* =========================================================
+   PERSISTENCE
+========================================================= */
+
+function saveState(){
+  localStorage.setItem("vault_state",JSON.stringify({
+    nodes,
+    objects,
+    logs:logs.slice(-300)
+  }));
+}
+
+function loadState(){
+
+  const saved=localStorage.getItem("vault_state");
+
+  if(!saved)return;
+
+  try{
+
+    const data=JSON.parse(saved);
+
+    nodes=data.nodes || nodes;
+    objects=data.objects || [];
+    logs=data.logs || [];
+
+  }catch(e){
+    console.error(e);
+  }
+}
+
+loadState();
+
+
+/* =========================================================
+   UTILITIES
+========================================================= */
+
+function formatBytes(bytes){
+
+  if(bytes===0)return "0 B";
+
+  const units=["B","KB","MB","GB","TB"];
+  const i=Math.floor(Math.log(bytes)/Math.log(1024));
+
+  return `${(bytes/Math.pow(1024,i)).toFixed(i?2:0)} ${units[i]}`;
+}
+
+
+function timeNow(){
+
+  return new Date().toLocaleTimeString();
+
+}
+
+
+function addLog(level,source,message,metadata={}){
+
+  const item={
+    timestamp:new Date().toISOString(),
+    level,
+    source,
+    message,
+    metadata
+  };
+
+  logs.push(item);
+
+  if(logs.length>300)
+    logs.shift();
+
+  renderTerminal();
+  renderLogs();
+  saveState();
+
+}
+
+
+function sleep(ms){
+
+  return new Promise(resolve=>setTimeout(resolve,ms));
+
+}
+
+
+/* =========================================================
+   SHA-256
+========================================================= */
+
+async function sha256(buffer){
+
+  const hashBuffer=await crypto.subtle.digest(
+    "SHA-256",
+    buffer
+  );
+
+  const hashArray=Array.from(
+    new Uint8Array(hashBuffer)
+  );
+
+  return hashArray
+    .map(b=>b.toString(16).padStart(2,"0"))
+    .join("");
+
+}
+
+
+/* =========================================================
+   UPLOAD
+========================================================= */
+
+async function uploadFile(event){
+
+  const file=event.target.files[0];
+
+  if(!file)return;
+
+  addLog(
+    "INFO",
+    "Gateway",
+    `Receiving object ${file.name}`
+  );
+
+  const buffer=await file.arrayBuffer();
+
+  const checksum=await sha256(buffer);
+
+  const object={
+    id:crypto.randomUUID(),
+    filename:file.name,
+    size:file.size,
+    mimeType:file.type || "application/octet-stream",
+    checksum,
+    createdAt:new Date().toISOString(),
+    replicationFactor:REPLICATION_FACTOR,
+    status:"HEALTHY",
+    replicas:[]
+  };
+
+  addLog(
+    "INFO",
+    "IntegrityEngine",
+    `SHA-256 calculated for ${file.name}`,
+    {checksum}
+  );
+
+  const selected=selectNodes(REPLICATION_FACTOR);
+
+  selected.forEach(node=>{
+
+    const replica={
+      nodeId:node.id,
+      checksum,
+      status:"HEALTHY",
+      data:btoa(
+        String.fromCharCode(
+          ...new Uint8Array(buffer).slice(0,50000)
+        )
+      ),
+      lastVerified:new Date().toISOString()
+    };
+
+    object.replicas.push(replica);
+
+    node.used+=file.size;
+    node.replicas.push(object.id);
+
+  });
+
+  objects.push(object);
+
+  addLog(
+    "SUCCESS",
+    "ReplicationEngine",
+    `${file.name} replicated across ${selected.map(n=>n.hostname).join(", ")}`
+  );
+
+  saveState();
+  renderAll();
+
+  event.target.value="";
+
+}
+
+
+/* =========================================================
+   PLACEMENT
+========================================================= */
+
+function selectNodes(count){
+
+  return nodes
+    .filter(n=>
+      n.status==="HEALTHY" &&
+      !n.isPartitioned
+    )
+    .sort((a,b)=>a.used-b.used)
+    .slice(0,count);
+
+}
+
+
+/* =========================================================
+   NODE FAILURE
+========================================================= */
+
+function failNode(id){
+
+  const node=nodes.find(n=>n.id===id);
+
+  if(!node)return;
+
+  node.status="FAILED";
+
+  addLog(
+    "ERROR",
+    "NodeManager",
+    `${node.hostname} marked FAILED`
+  );
+
+  updateObjectsAfterNodeFailure(node);
+
+  renderAll();
+
+}
+
+
+function updateObjectsAfterNodeFailure(node){
+
+  objects.forEach(obj=>{
+
+    const replica=obj.replicas.find(
+      r=>r.nodeId===node.id
+    );
+
+    if(replica){
+
+      replica.status="MISSING";
+
+      obj.status="DEGRADED";
+
+      addLog(
+        "WARN",
+        "RepairEngine",
+        `${obj.filename} lost replica on ${node.hostname}`
+      );
+
+    }
+
+  });
+
+}
+
+
+/* =========================================================
+   RECOVER NODE
+========================================================= */
+
+function recoverNode(id){
+
+  const node=nodes.find(n=>n.id===id);
+
+  if(!node)return;
+
+  node.status="RECOVERING";
+
+  addLog(
+    "INFO",
+    "NodeManager",
+    `${node.hostname} entering RECOVERING state`
+  );
+
+  renderAll();
+
+  setTimeout(()=>{
+
+    node.status="HEALTHY";
+    node.isPartitioned=false;
+
+    addLog(
+      "SUCCESS",
+      "NodeManager",
+      `${node.hostname} recovered`
+    );
+
+    repairAll();
+
+  },1500);
+
+}
+
+
+/* =========================================================
+   CORRUPTION
+========================================================= */
+
+function corruptReplica(){
+
+  const candidates=[];
+
+  objects.forEach(obj=>{
+
+    obj.replicas.forEach(replica=>{
+
+      if(replica.status==="HEALTHY"){
+        candidates.push({
+          obj,
+          replica
+        });
+      }
+
+    });
+
+  });
+
+  if(!candidates.length){
+
+    addLog(
+      "WARN",
+      "IntegrityEngine",
+      "No healthy replica available to corrupt"
+    );
+
+    return;
+  }
+
+  const selected=
+    candidates[
+      Math.floor(Math.random()*candidates.length)
+    ];
+
+  selected.replica.checksum=
+    "CORRUPTED-"+crypto.randomUUID();
+
+  selected.replica.status="CORRUPTED";
+
+  selected.obj.status="DEGRADED";
+
+  addLog(
+    "ERROR",
+    "IntegrityEngine",
+    `Bit-rot detected on ${selected.obj.filename}`,
+    {
+      node:selected.replica.nodeId
+    }
+  );
+
+  renderAll();
+
+}
+
+
+/* =========================================================
+   AUTO REPAIR
+========================================================= */
+
+async function repairAll(){
+
+  if(activeRepairs>0)return;
+
+  activeRepairs=1;
+
+  renderAll();
+
+  for(const obj of objects){
+
+    const healthy=obj.replicas.filter(
+      r=>{
+        const node=nodes.find(n=>n.id===r.nodeId);
+
+        return r.status==="HEALTHY" &&
+               node &&
+               node.status==="HEALTHY" &&
+               !node.isPartitioned;
+      }
+    );
+
+    if(healthy.length>=obj.replicationFactor){
+
+      obj.status="HEALTHY";
+      continue;
+
+    }
+
+    const missing=obj.replicationFactor-healthy.length;
+
+    addLog(
+      "WARN",
+      "RepairEngine",
+      `Repair required for ${obj.filename}: ${healthy.length}/${obj.replicationFactor}`
+    );
+
+    for(let i=0;i<missing;i++){
+
+      const existingNodeIds=
+        obj.replicas.map(r=>r.nodeId);
+
+      const target=nodes
+        .filter(n=>
+          n.status==="HEALTHY" &&
+          !n.isPartitioned &&
+          !existingNodeIds.includes(n.id)
+        )
+        .sort((a,b)=>a.used-b.used)[0];
+
+      if(!target){
+
+        addLog(
+          "ERROR",
+          "RepairEngine",
+          `No available node for ${obj.filename}`
+        );
+
+        continue;
+      }
+
+      await sleep(700);
+
+      const source=healthy[0];
+
+      obj.replicas.push({
+        nodeId:target.id,
+        checksum:obj.checksum,
+        status:"HEALTHY",
+        data:source.data,
+        lastVerified:new Date().toISOString()
+      });
+
+      target.used+=obj.size;
+      target.replicas.push(obj.id);
+
+      addLog(
+        "SUCCESS",
+        "RepairEngine",
+        `Replica restored: ${obj.filename} → ${target.hostname}`
+      );
+
+      healthy.push({
+        nodeId:target.id,
+        status:"HEALTHY"
+      });
+
+    }
+
+    const healthyCount=
+      obj.replicas.filter(r=>{
+
+        const node=nodes.find(n=>n.id===r.nodeId);
+
+        return r.status==="HEALTHY" &&
+          node &&
+          node.status==="HEALTHY";
+
+      }).length;
+
+    obj.status=
+      healthyCount>=obj.replicationFactor
+      ?"HEALTHY"
+      :"DEGRADED";
+
+  }
+
+  activeRepairs=0;
+
+  addLog(
+    "SUCCESS",
+    "RepairEngine",
+    "Automatic repair cycle completed"
+  );
+
+  saveState();
+  renderAll();
+
+}
+
+
+/* =========================================================
+   NETWORK PARTITION
+========================================================= */
+
+function partitionNode(){
+
+  const node=
+    nodes.find(n=>n.status==="HEALTHY");
+
+  if(!node){
+
+    addLog(
+      "WARN",
+      "NetworkSimulator",
+      "No healthy node available"
+    );
+
+    return;
+  }
+
+  node.isPartitioned=!node.isPartitioned;
+
+  node.status=
+    node.isPartitioned
+    ?"DEGRADED"
+    :"HEALTHY";
+
+  addLog(
+    node.isPartitioned?"WARN":"SUCCESS",
+    "NetworkSimulator",
+    `${node.hostname} network partition ${node.isPartitioned?"ENABLED":"DISABLED"}`
+  );
+
+  renderAll();
+
+}
+
+
+/* =========================================================
+   REBALANCING
+========================================================= */
+
+async function rebalance(){
+
+  addLog(
+    "INFO",
+    "RebalanceEngine",
+    "Calculating storage distribution"
+  );
+
+  await sleep(800);
+
+  const healthy=nodes.filter(
+    n=>n.status==="HEALTHY"
+  );
+
+  if(!healthy.length)return;
+
+  const average=
+    healthy.reduce((a,n)=>a+n.used,0)/healthy.length;
+
+  for(const node of healthy){
+
+    if(node.used>average*1.2){
+
+      const target=
+        healthy
+          .filter(n=>n.id!==node.id)
+          .sort((a,b)=>a.used-b.used)[0];
+
+      if(!target)continue;
+
+      addLog(
+        "INFO",
+        "RebalanceEngine",
+        `Evaluating migration ${node.hostname} → ${target.hostname}`
+      );
+
+    }
+
+  }
+
+  addLog(
+    "SUCCESS",
+    "RebalanceEngine",
+    "Rebalancing calculation completed"
+  );
+
+}
+
+
+/* =========================================================
+   HEARTBEATS
+========================================================= */
+
+setInterval(()=>{
+
+  nodes.forEach(node=>{
+
+    if(node.status==="FAILED")return;
+
+    node.lastHeartbeat=Date.now();
+
+  });
+
+  renderAll();
+
+},3000);
+
+
+/* =========================================================
+   INTEGRITY AUDIT
+========================================================= */
+
+async function verifyAll(){
+
+  addLog(
+    "INFO",
+    "IntegrityEngine",
+    "Starting complete integrity audit"
+  );
+
+  let corrupted=0;
+
+  for(const obj of objects){
+
+    for(const replica of obj.replicas){
+
+      if(replica.status==="MISSING")continue;
+
+      if(replica.checksum!==obj.checksum){
+
+        replica.status="CORRUPTED";
+        obj.status="DEGRADED";
+
+        corrupted++;
+
+        addLog(
+          "ERROR",
+          "IntegrityEngine",
+          `Checksum mismatch: ${obj.filename}`
+        );
+
+      }
+
+    }
+
+  }
+
+  addLog(
+    corrupted?"WARN":"SUCCESS",
+    "IntegrityEngine",
+    `Integrity audit completed — ${corrupted} corrupted replicas`
+  );
+
+  renderAll();
+
+}
+
+
+/* =========================================================
+   AUTOMATED DEMO
+========================================================= */
+
+async function runDemo(){
+
+  if(demoRunning)return;
+
+  demoRunning=true;
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "▶ AUTOMATED VAULT DEMO STARTED"
+  );
+
+  await sleep(1500);
+
+  /* STEP 1 */
+
+  const content=
+    new TextEncoder().encode(
+      "VAULT BENCHMARK DATA ".repeat(2000)
+    );
+
+  const checksum=
+    await sha256(content);
+
+  const obj={
+    id:crypto.randomUUID(),
+    filename:"vault-benchmark.bin",
+    size:content.length,
+    mimeType:"application/octet-stream",
+    checksum,
+    createdAt:new Date().toISOString(),
+    replicationFactor:3,
+    status:"HEALTHY",
+    replicas:[]
+  };
+
+  const selected=
+    nodes
+      .filter(n=>n.status==="HEALTHY")
+      .slice(0,3);
+
+  selected.forEach(node=>{
+
+    obj.replicas.push({
+      nodeId:node.id,
+      checksum,
+      status:"HEALTHY",
+      data:btoa(
+        String.fromCharCode(...content)
+      ),
+      lastVerified:new Date().toISOString()
+    });
+
+    node.used+=obj.size;
+    node.replicas.push(obj.id);
+
+  });
+
+  objects.push(obj);
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "1/12 Sample object uploaded"
+  );
+
+  await sleep(1500);
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "2/12 SHA-256 computed and 3 replicas created"
+  );
+
+  await sleep(1500);
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "3/12 All replicas verified HEALTHY"
+  );
+
+  await sleep(1500);
+
+  failNode("node-02");
+
+  addLog(
+    "ERROR",
+    "DemoEngine",
+    "4/12 Node-02 failure injected"
+  );
+
+  await sleep(1500);
+
+  addLog(
+    "WARN",
+    "DemoEngine",
+    "5/12 Replication deficit detected: 2/3"
+  );
+
+  await sleep(1500);
+
+  await repairAll();
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "6/12 Auto-repair completed"
+  );
+
+  await sleep(1500);
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "7/12 Redundancy restored to 3/3"
+  );
+
+  await sleep(1500);
+
+  corruptReplica();
+
+  addLog(
+    "ERROR",
+    "DemoEngine",
+    "8/12 Replica byte corruption injected"
+  );
+
+  await sleep(1500);
+
+  await verifyAll();
+
+  addLog(
+    "ERROR",
+    "DemoEngine",
+    "9/12 SHA-256 mismatch detected"
+  );
+
+  await sleep(1500);
+
+  await repairAll();
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "10/12 Corrupted replica healed"
+  );
+
+  await sleep(1500);
+
+  await rebalance();
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "11/12 Rebalancing calculation completed"
+  );
+
+  await sleep(1500);
+
+  await repairAll();
+
+  addLog(
+    "SUCCESS",
+    "DemoEngine",
+    "12/12 FINAL: Cluster durability restored"
+  );
+
+  demoRunning=false;
+
+  renderAll();
+
+}
+
+
+/* =========================================================
+   UI NAVIGATION
+========================================================= */
+
+function showPage(page){
+
+  document.querySelectorAll(".page")
+    .forEach(p=>p.classList.add("hidden"));
+
+  document.getElementById(page)
+    .classList.remove("hidden");
+
+  const titles={
+    dashboard:"Cluster Overview",
+    nodes:"Node Fleet",
+    objects:"Object Browser",
+    logs:"System Logs"
+  };
+
+  document.getElementById("pageTitle").textContent=
+    titles[page];
+
+}
+
+
+/* =========================================================
+   RENDER
+========================================================= */
+
+function renderAll(){
+
+  renderMetrics();
+  renderNodes();
+  renderArchitecture();
+  renderStorage();
+  renderObjects();
+  renderTerminal();
+  renderLogs();
+
+  lucide.createIcons();
+
+}
+
+
+function renderMetrics(){
+
+  const totalUsed=
+    nodes.reduce((a,n)=>a+n.used,0);
+
+  const healthy=
+    nodes.filter(n=>n.status==="HEALTHY").length;
+
+  const totalReplicas=
+    objects.reduce(
+      (sum,obj)=>sum+obj.replicationFactor,
+      0
+    );
+
+  const healthyReplicas=
+    objects.reduce(
+      (sum,obj)=>
+        sum+
+        obj.replicas.filter(r=>{
+
+          const n=nodes.find(n=>n.id===r.nodeId);
+
+          return r.status==="HEALTHY" &&
+                 n &&
+                 n.status==="HEALTHY";
+
+        }).length,
+      0
+    );
+
+  const durability=
+    totalReplicas
+    ?Math.round(
+      healthyReplicas/totalReplicas*100
+    )
+    :100;
+
+  document.getElementById("usedSpace")
+    .textContent=formatBytes(totalUsed);
+
+  document.getElementById("usedPercent")
+    .textContent=
+      ((totalUsed/(CAPACITY*5))*100).toFixed(3)+"%";
+
+  document.getElementById("healthyNodes")
+    .textContent=`${healthy} / ${nodes.length}`;
+
+  document.getElementById("objectCount")
+    .textContent=objects.length;
+
+  document.getElementById("durabilityScore")
+    .textContent=durability+"%";
+
+  document.getElementById("repairCount")
+    .textContent=activeRepairs;
+
+  const clusterHealthy=
+    healthy===nodes.length;
+
+  document.getElementById("clusterStatus")
+    .textContent=
+      clusterHealthy
+      ?"OPERATIONAL"
+      :"DEGRADED";
+
+  document.getElementById("clusterDot").className=
+    "node-dot "+
+    (clusterHealthy
+      ?"text-emerald-400 bg-emerald-400"
+      :"text-amber-400 bg-amber-400");
+
+}
+
+
+/* =========================================================
+   NODE RENDER
+========================================================= */
+
+function renderNodes(){
+
+  const grid=
+    document.getElementById("nodeGrid");
+
+  grid.innerHTML="";
+
+  nodes.forEach(node=>{
+
+    const percent=
+      Math.min(
+        100,
+        node.used/node.capacity*100
+      );
+
+    const statusClass=
+      node.status.toLowerCase();
+
+    grid.innerHTML+=`
+
+      <div class="card p-5">
+
+        <div class="flex justify-between">
+
+          <div class="flex items-center gap-3">
+
+            <div class="node-dot
+              ${node.status==="HEALTHY"
+                ?"text-emerald-400 bg-emerald-400"
+                :"text-rose-400 bg-rose-400"}">
+            </div>
+
+            <div>
+              <div class="font-bold mono">
+                ${node.hostname}
+              </div>
+              <div class="text-xs text-slate-500">
+                ${node.id}
+              </div>
+            </div>
+
+          </div>
+
+          <span class="status ${statusClass}">
+            ${node.status}
+          </span>
+
+        </div>
+
+        <div class="mt-5">
+
+          <div class="flex justify-between text-xs mb-2">
+            <span>Storage</span>
+            <span class="mono">
+              ${formatBytes(node.used)}
+            </span>
+          </div>
+
+          <div class="progress">
+            <div
+              style="width:${percent}%"
+              class="bg-cyan-400">
+            </div>
+          </div>
+
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 mt-5 text-xs">
+
+          <div class="bg-slate-900 rounded-lg p-3">
+            <div class="text-slate-500">Latency</div>
+            <div class="mono mt-1">
+              ${node.latencyMs} ms
+            </div>
+          </div>
+
+          <div class="bg-slate-900 rounded-lg p-3">
+            <div class="text-slate-500">Replicas</div>
+            <div class="mono mt-1">
+              ${node.replicas.length}
+            </div>
+          </div>
+
+        </div>
+
+        <div class="mt-4 text-xs text-slate-500">
+          Last heartbeat:
+          <span class="text-slate-300">
+            ${Math.floor(
+              (Date.now()-node.lastHeartbeat)/1000
+            )}s ago
+          </span>
+        </div>
+
+        <div class="flex flex-wrap gap-2 mt-5">
+
+          ${
+            node.status!=="FAILED"
+            ?`
+              <button
+                onclick="failNode('${node.id}')"
+                class="text-xs px-3 py-2 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/20">
+                Fail
+              </button>
+            `
+            :""
+          }
+
+          ${
+            node.status==="FAILED"
+            ?`
+              <button
+                onclick="recoverNode('${node.id}')"
+                class="text-xs px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                Recover
+              </button>
+            `
+            :""
+          }
+
+          <button
+            onclick="toggleLatency('${node.id}')"
+            class="text-xs px-3 py-2 rounded-lg bg-sky-500/10 text-sky-300 border border-sky-500/20">
+            Latency
+          </button>
+
+          <button
+            onclick="togglePartition('${node.id}')"
+            class="text-xs px-3 py-2 rounded-lg bg-purple-500/10 text-purple-300 border border-purple-500/20">
+            Partition
+          </button>
+
+        </div>
+
+      </div>
+    `;
+
+  });
+
+}
+
+
+/* =========================================================
+   ARCHITECTURE
+========================================================= */
+
+function renderArchitecture(){
+
+  const container=
+    document.getElementById("architectureNodes");
+
+  container.innerHTML="";
+
+  nodes.forEach(node=>{
+
+    container.innerHTML+=`
+
+      <div class="rounded-xl p-4 bg-slate-900 border border-slate-800">
+
+        <div class="flex justify-between items-center">
+
+          <span class="mono text-xs">
+            ${node.hostname}
+          </span>
+
+          <div class="node-dot
+            ${node.status==="HEALTHY"
+              ?"text-emerald-400 bg-emerald-400"
+              :"text-rose-400 bg-rose-400"}">
+          </div>
+
+        </div>
+
+        <div class="text-xs text-slate-500 mt-3">
+          ${formatBytes(node.used)}
+        </div>
+
+      </div>
+
+    `;
+
+  });
+
+}
+
+
+/* =========================================================
+   STORAGE
+========================================================= */
+
+function renderStorage(){
+
+  const el=
+    document.getElementById("storageDistribution");
+
+  el.innerHTML="";
+
+  nodes.forEach(node=>{
+
+    const percent=
+      node.used/node.capacity*100;
+
+    el.innerHTML+=`
+
+      <div>
+
+        <div class="flex justify-between text-xs mb-2">
+
+          <span class="mono">
+            ${node.hostname}
+          </span>
+
+          <span>
+            ${formatBytes(node.used)}
+            /
+            ${formatBytes(node.capacity)}
+          </span>
+
+        </div>
+
+        <div class="progress">
+
+          <div
+            class="bg-cyan-400"
+            style="width:${percent}%">
+          </div>
+
+        </div>
+
+      </div>
+
+    `;
+
+  });
+
+}
+
+
+/* =========================================================
+   OBJECTS
+========================================================= */
+
+function renderObjects(){
+
+  const table=
+    document.getElementById("objectTable");
+
+  table.innerHTML="";
+
+  if(!objects.length){
+
+    table.innerHTML=`
+      <tr>
+        <td colspan="5"
+          class="p-10 text-center text-slate-500">
+          No objects uploaded yet.
+        </td>
+      </tr>
+    `;
+
+    return;
+  }
+
+  objects.forEach(obj=>{
+
+    const healthy=obj.replicas.filter(
+      r=>r.status==="HEALTHY"
+    ).length;
+
+    table.innerHTML+=`
+
+      <tr
+        onclick="openObject('${obj.id}')"
+        class="border-t border-slate-800 hover:bg-slate-900 cursor-pointer">
+
+        <td class="p-4">
+          <div class="font-medium">
+            ${escapeHtml(obj.filename)}
+          </div>
+          <div class="text-[10px] text-slate-500 mono">
+            ${obj.id}
+          </div>
+        </td>
+
+        <td class="p-4 mono">
+          ${formatBytes(obj.size)}
+        </td>
+
+        <td class="p-4 mono text-xs text-cyan-300">
+          ${obj.checksum.slice(0,18)}...
+        </td>
+
+        <td class="p-4">
+          ${healthy}/${obj.replicationFactor}
+        </td>
+
+        <td class="p-4">
+
+          <span class="status ${
+            obj.status==="HEALTHY"
+            ?"healthy"
+            :"degraded"
+          }">
+            ${obj.status}
+          </span>
+
+        </td>
+
+      </tr>
+    `;
+
+  });
+
+}
+
+
+/* =========================================================
+   OBJECT DETAIL
+========================================================= */
+
+function openObject(id){
+
+  const obj=objects.find(o=>o.id===id);
+
+  if(!obj)return;
+
+  document.getElementById("modalTitle")
+    .textContent=obj.filename;
+
+  document.getElementById("modalContent")
+    .innerHTML=`
+
+      <div class="grid md:grid-cols-2 gap-4">
+
+        <div class="bg-slate-900 rounded-xl p-4">
+
+          <div class="text-xs text-slate-500">
+            OBJECT ID
+          </div>
+
+          <div class="mono text-xs mt-2 break-all">
+            ${obj.id}
+          </div>
+
+        </div>
+
+        <div class="bg-slate-900 rounded-xl p-4">
+
+          <div class="text-xs text-slate-500">
+            SIZE
+          </div>
+
+          <div class="mono mt-2">
+            ${formatBytes(obj.size)}
+          </div>
+
+        </div>
+
+      </div>
+
+      <div class="bg-slate-900 rounded-xl p-4 mt-4">
+
+        <div class="text-xs text-slate-500">
+          SHA-256
+        </div>
+
+        <div class="mono text-xs mt-2 break-all text-cyan-300">
+          ${obj.checksum}
+        </div>
+
+      </div>
+
+      <div class="mt-5">
+
+        <h3 class="font-semibold mb-3">
+          Replica Topology
+        </h3>
+
+        <div class="space-y-3">
+
+          ${obj.replicas.map(replica=>{
+
+            const node=
+              nodes.find(n=>n.id===replica.nodeId);
+
+            return`
+
+              <div class="flex justify-between items-center bg-slate-900 rounded-xl p-4">
+
+                <div>
+                  <div class="mono">
+                    ${node?.hostname || replica.nodeId}
+                  </div>
+
+                  <div class="text-xs text-slate-500">
+                    ${node?.status || "UNKNOWN"}
+                  </div>
+                </div>
+
+                <span class="status ${
+                  replica.status==="HEALTHY"
+                  ?"healthy"
+                  :replica.status==="CORRUPTED"
+                  ?"corrupted"
+                  :"failed"
+                }">
+                  ${replica.status}
+                </span>
+
+              </div>
+
+            `;
+
+          }).join("")}
+
+        </div>
+
+      </div>
+
+      <div class="flex gap-2 mt-5">
+
+        <button
+          onclick="verifyAll();closeModal()"
+          class="px-4 py-2 rounded-lg bg-cyan-500 text-slate-950 font-bold text-sm">
+          Verify Integrity
+        </button>
+
+        <button
+          onclick="repairAll();closeModal()"
+          class="px-4 py-2 rounded-lg bg-emerald-500/10 text-emerald-300 text-sm">
+          Repair
+        </button>
+
+      </div>
+
+    `;
+
+  document
+    .getElementById("objectModal")
+    .classList.remove("hidden");
+
+}
+
+
+function closeModal(){
+
+  document
+    .getElementById("objectModal")
+    .classList.add("hidden");
+
+}
+
+
+/* =========================================================
+   TERMINAL
+========================================================= */
+
+function renderTerminal(){
+
+  const terminal=
+    document.getElementById("terminal");
+
+  terminal.innerHTML=
+    logs
+      .slice(-80)
+      .map(log=>`
+
+        <div class="log-line">
+
+          <span class="text-slate-600">
+            ${new Date(log.timestamp)
+              .toLocaleTimeString()}
+          </span>
+
+          <span class="${
+            log.level==="ERROR"
+            ?"text-rose-400"
+            :log.level==="WARN"
+            ?"text-amber-400"
+            :log.level==="SUCCESS"
+            ?"text-emerald-400"
+            :"text-cyan-400"
+          }">
+            [${log.level}]
+          </span>
+
+          <span class="text-purple-300">
+            [${log.source}]
+          </span>
+
+          <span>
+            ${escapeHtml(log.message)}
+          </span>
+
+        </div>
+
+      `)
+      .join("");
+
+  terminal.scrollTop=terminal.scrollHeight;
+
+}
+
+
+/* =========================================================
+   FULL LOGS
+========================================================= */
+
+function renderLogs(){
+
+  const el=
+    document.getElementById("fullLogs");
+
+  if(!el)return;
+
+  el.innerHTML=
+    logs
+      .slice()
+      .reverse()
+      .map(log=>`
+
+        <div class="log-line">
+
+          <span class="text-slate-600">
+            ${new Date(log.timestamp)
+              .toLocaleString()}
+          </span>
+
+          <span class="text-cyan-400">
+            [${log.source}]
+          </span>
+
+          <span class="${
+            log.level==="ERROR"
+            ?"text-rose-400"
+            :log.level==="WARN"
+            ?"text-amber-400"
+            :log.level==="SUCCESS"
+            ?"text-emerald-400"
+            :"text-slate-300"
+          }">
+            ${escapeHtml(log.message)}
+          </span>
+
+        </div>
+
+      `)
+      .join("");
+
+}
+
+
+/* =========================================================
+   NODE CONTROLS
+========================================================= */
+
+function toggleLatency(id){
+
+  const node=nodes.find(n=>n.id===id);
+
+  if(!node)return;
+
+  node.latencyMs=
+    node.latencyMs<100
+    ?500
+    :20;
+
+  addLog(
+    "WARN",
+    "NetworkSimulator",
+    `${node.hostname} latency set to ${node.latencyMs}ms`
+  );
+
+  renderAll();
+
+}
+
+
+function togglePartition(id){
+
+  const node=nodes.find(n=>n.id===id);
+
+  if(!node)return;
+
+  node.isPartitioned=!node.isPartitioned;
+
+  node.status=
+    node.isPartitioned
+    ?"DEGRADED"
+    :"HEALTHY";
+
+  addLog(
+    node.isPartitioned?"WARN":"SUCCESS",
+    "NetworkSimulator",
+    `${node.hostname} partition ${node.isPartitioned?"enabled":"disabled"}`
+  );
+
+  renderAll();
+
+}
+
+
+/* =========================================================
+   SECURITY
+========================================================= */
+
+function escapeHtml(value){
+
+  return String(value)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+
+}
+
+
+/* =========================================================
+   INITIAL EVENT
+========================================================= */
+
+if(!logs.length){
+
+  addLog(
+    "SUCCESS",
+    "Vault",
+    "Vault distributed storage cluster initialized"
+  );
+
+  addLog(
+    "INFO",
+    "NodeManager",
+    "5 storage nodes registered"
+  );
+
+  addLog(
+    "INFO",
+    "Heartbeat",
+    "Heartbeat monitor started — 3 second interval"
+  );
+
+}
+
+
+/* =========================================================
+   START
+========================================================= */
+
+renderAll();
+
+setInterval(()=>{
+  renderAll();
+},1000);
+
+</script>
+
+</body>
+</html>
